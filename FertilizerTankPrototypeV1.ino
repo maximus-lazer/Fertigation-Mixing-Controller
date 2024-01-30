@@ -7,11 +7,16 @@
 #define tankLBOT D3
 #define tankRTOP D6
 #define tankRBOT D5
+#define MAXPERCENT 95.0
+#define MINPERCENT 1.0
 
 
 float VCC = 3.3;
 int bits = 4095;
 float conversion = VCC / bits;
+volatile float percentFullL;
+volatile float percentFullR;
+const float fertPercent = 10.0;
 
 enum TankState {FILL, EMPTY} tankLeft, tankRight;
 enum SourceValveState {OPEN, CLOSE} waterSource, fertilizerSource;
@@ -21,6 +26,9 @@ enum SystemState {FILL_RIGHT, FILL_LEFT} system;
 void setup() {
   // initialize serial communication at 9600 bits per second:
   Serial.begin(9600);
+
+  percentFullL = 100.0;
+  percentFullR = 0.0;
 
   tankLeft = FILL;
   tankRight = EMPTY;
@@ -40,65 +48,64 @@ void loop() {
   int sensorValueR = analogRead(A0);
   int sensorValueL = analogRead(A1);
 
+  percentFullL = sensorValueL/4095.0;
+  percentFullR = sensorValueR/4095.0;
+
   float voltageR = sensorValueR * conversion;
   float voltageL = sensorValueL * conversion;
   // print out the value you read:
   Serial.println("Voltage Left: " + String(voltageL) + " Voltage Right: " + String(voltageR));
 
-  tankLeftFill(true);
-  tankRightFill(false);
-  delay(250);
-  tankLeftFill(false);
-  tankRightFill(true);
-  delay(250);
-  
+  systemStateMachine();
+
 }
 
-void systemStateMachine(int floatSensorL, int floatSensorR) {
-  
+void systemStateMachine() {
   switch (system) {
     case FILL_RIGHT:
-
-      if ()
-
+      tankValveSwitch(1);
+      fillTank(1);
+      if (percentFillL < MINPERCENT)
+        system = FILL_LEFT;
       break;
 
     case FILL_LEFT:
-
+      tankValveSwitch(0);
+      fillTank(0);
+      if (percentFillL < MINPERCENT)
+        system = FILL_RIGHT;
       break;
-
     default:
         waterSource = CLOSE;
         fertilizerSource = CLOSE;
       break;
-
   }
 }
 
-void fillTank(int floatSensorL, int floatSensorR) {
-
-  if (waterSource == CLOSE && floatSensorR <= )
-
+void fillTank(bool LeftOrRight) {
+  if(LeftOrRight?percentFillR:percentFillL <= fertPercent){
+    fertilizerSource = OPEN;
+    waterSource = CLOSE;
+  }
+  if(LeftOrRight?percentFillR:percentFillL <= MAXPERCENT){
+    fertilizerSource = CLOSE;
+    waterSource = OPEN;
+  }
+  fertilizerSource = CLOSE;
+  waterSource = CLOSE;
 }
 
-void tankLeftFill(bool isFilling) {
-  if (isFilling) {
-    digitalWrite(tankLTOP, LOW);
-    digitalWrite(tankLBOT, HIGH);
-  } else {
+void tankValveSwitch(bool LeftOrRight){
+  if (bool LeftOrRight){
     digitalWrite(tankLTOP, HIGH);
     digitalWrite(tankLBOT, LOW);
-  }
-
-}
-
-void tankRightFill(bool isFilling) {
-  if (isFilling) {
     digitalWrite(tankRTOP, LOW);
     digitalWrite(tankRBOT, HIGH);
-  } else {
+  }
+  else{
+    digitalWrite(tankLTOP, LOW);
+    digitalWrite(tankLBOT, HIGH);
     digitalWrite(tankRTOP, HIGH);
     digitalWrite(tankRBOT, LOW);
   }
-  
 }
