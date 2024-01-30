@@ -20,7 +20,7 @@ const float fertPercent = 10.0;
 
 enum TankState {FILL, EMPTY} tankLeft, tankRight;
 enum SourceValveState {OPEN, CLOSE} waterSource, fertilizerSource;
-enum SystemState {FILL_RIGHT, FILL_LEFT} system;
+enum SystemState {FILL_RIGHT, FILL_LEFT} systemState;
 
 // the setup routine runs once when you press reset:
 void setup() {
@@ -34,7 +34,7 @@ void setup() {
   tankRight = EMPTY;
   waterSource = CLOSE;
   fertilizerSource = CLOSE;
-  system = FILL_RIGHT;
+  systemState = FILL_RIGHT;
 
   pinMode(tankLTOP, OUTPUT);
   pinMode(tankLBOT, OUTPUT);
@@ -61,19 +61,19 @@ void loop() {
 }
 
 void systemStateMachine() {
-  switch (system) {
+  switch (systemState) {
     case FILL_RIGHT:
       tankValveSwitch(1);
       fillTank(1);
-      if (percentFillL < MINPERCENT)
-        system = FILL_LEFT;
+      if (percentFullR < MINPERCENT)
+        systemState = FILL_LEFT;
       break;
 
     case FILL_LEFT:
       tankValveSwitch(0);
       fillTank(0);
-      if (percentFillL < MINPERCENT)
-        system = FILL_RIGHT;
+      if (percentFullL < MINPERCENT)
+        systemState = FILL_RIGHT;
       break;
     default:
         waterSource = CLOSE;
@@ -83,11 +83,11 @@ void systemStateMachine() {
 }
 
 void fillTank(bool LeftOrRight) {
-  if(LeftOrRight?percentFillR:percentFillL <= fertPercent){
+  if(LeftOrRight?percentFullR:percentFullL <= fertPercent){
     fertilizerSource = OPEN;
     waterSource = CLOSE;
   }
-  if(LeftOrRight?percentFillR:percentFillL <= MAXPERCENT){
+  if(LeftOrRight?percentFullR:percentFullL <= MAXPERCENT){
     fertilizerSource = CLOSE;
     waterSource = OPEN;
   }
@@ -96,7 +96,7 @@ void fillTank(bool LeftOrRight) {
 }
 
 void tankValveSwitch(bool LeftOrRight){
-  if (bool LeftOrRight){
+  if (LeftOrRight){
     digitalWrite(tankLTOP, HIGH);
     digitalWrite(tankLBOT, LOW);
     digitalWrite(tankRTOP, LOW);
