@@ -7,29 +7,35 @@
 #define tankLBOT D3
 #define tankRTOP D6
 #define tankRBOT D5
-#define MAXPERCENT 0.90
-#define MINPERCENT 0.20
 
+#define MAXPERCENT 0.90 // Percent threshold for full Tank
+#define MINPERCENT 0.20 // Percent threshold for empty Tank
 
-float VCC = 3.3;
-int bits = 4095;
-float conversion = VCC / bits;
-volatile float percentFullL;
-volatile float percentFullR;
-const float fertPercent = .50;
+// Defining constants
+const float VCC = 3.3; // VCC output voltage from pins
+const int bits = 4095; // 2^(16)-1 bits for ADC
+const float conversion = VCC / bits; // Conversion multiplier for converting analog input to voltage
+const float fertPercent = .50; // Percent threshold for filling fertilizer TODO: Change this to read from controller DIO
+
+volatile float percentFullL; // Percent threshold when Left Tank is full
+volatile float percentFullR; // Percent threshold when Right Tank is full
 
 enum TankState {FILL, EMPTY} tankLeft, tankRight;
 enum SourceValveState {CLOSE, OPEN} waterSource, fertilizerSource;
 enum SystemState {FILL_FERT_RIGHT, FILL_WATER_RIGHT, RIGHT_FULL_WAIT, FILL_FERT_LEFT, FILL_WATER_LEFT,LEFT_FULL_WAIT} systemState;
 
-// the setup routine runs once when you press reset:
+/**
+ * Runs once controller turns on or resets
+ */
 void setup() {
   // initialize serial communication at 9600 bits per second:
   Serial.begin(9600);
 
+  // Setting some initial value
   percentFullL = 100.0;
   percentFullR = 0.0;
 
+  // TODO: initialize by reading sensors
   tankLeft = FILL;
   tankRight = EMPTY;
   waterSource = CLOSE;
@@ -37,13 +43,16 @@ void setup() {
   systemState = FILL_FERT_RIGHT;
   tankValveSwitch(1);
 
+  // Initializing pins
   pinMode(tankLTOP, OUTPUT);
   pinMode(tankLBOT, OUTPUT);
   pinMode(tankRTOP, OUTPUT);
   pinMode(tankRBOT, OUTPUT);
 }
 
-// the loop routine runs over and over again forever:
+/**
+ * Runs while controller is on
+ */
 void loop() {
   // read the input on analog pin 0 & 1:
   int sensorValueR = analogRead(A0);
@@ -54,6 +63,7 @@ void loop() {
 
   float voltageR = sensorValueR * conversion;
   float voltageL = sensorValueL * conversion;
+
   // print out the value you read:
   Serial.print("VL: " + String(voltageL) + " VR: " + String(voltageR));
   Serial.print(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
@@ -61,13 +71,18 @@ void loop() {
   Serial.print(" FertSource: " + String(fertilizerSource));
   Serial.println(" WaterSource: " + String(waterSource));
 
+  // Running state machine
   systemStateMachine();
 
 }
 
+/**
+* The state machine for the entire system
+*/
 void systemStateMachine() {
   switch (systemState) {
 
+    // Filling Right Tank to Fertilizer percentage
     case FILL_FERT_RIGHT:
       fertilizerSource = OPEN;
       waterSource = CLOSE;
@@ -75,6 +90,7 @@ void systemStateMachine() {
         systemState = FILL_WATER_RIGHT;
       break;
     
+    // Filling rest of Right tank with water
     case FILL_WATER_RIGHT:
       fertilizerSource = CLOSE;
       waterSource = OPEN;
@@ -82,6 +98,7 @@ void systemStateMachine() {
         systemState = RIGHT_FULL_WAIT;
       break;
     
+    // Waiting for Left Tank to empty
     case RIGHT_FULL_WAIT:
       fertilizerSource = CLOSE;
       waterSource = CLOSE;
@@ -91,6 +108,7 @@ void systemStateMachine() {
       }
       break;
 
+    // Filling Left Tank to Fertilizer percentage
     case FILL_FERT_LEFT:
       fertilizerSource = OPEN;
       waterSource = CLOSE;
@@ -98,6 +116,7 @@ void systemStateMachine() {
         systemState = FILL_WATER_LEFT;
       break;
 
+    // Filling rest of Left tank with water
     case FILL_WATER_LEFT:
       fertilizerSource = CLOSE;
       waterSource = OPEN;
@@ -105,16 +124,18 @@ void systemStateMachine() {
         systemState = LEFT_FULL_WAIT;
       break;
 
+    // Waiting for Right Tank to empty
     case LEFT_FULL_WAIT:
       fertilizerSource = CLOSE;
       waterSource = CLOSE;
-      if (percentFullR < MINPERCENT){
+      if (percentFullR < MINPERCENT) {
         systemState = FILL_FERT_RIGHT;
         tankValveSwitch(1);
       }
       break;
     break;
 
+    // A default state if something goes wrong (should never get here)
     default:
         waterSource = CLOSE;
         fertilizerSource = CLOSE;
@@ -122,7 +143,11 @@ void systemStateMachine() {
   }
 }
 
-void tankValveSwitch(bool LeftOrRight){
+/**
+ * Switch filling and emptying the system
+ * @param LeftOrRight: True for Right Fill, False for Left Fill
+ */
+void tankValveSwitch(bool LeftOrRight) {
   if (LeftOrRight){
     digitalWrite(tankLTOP, LOW);
     digitalWrite(tankLBOT, HIGH);
