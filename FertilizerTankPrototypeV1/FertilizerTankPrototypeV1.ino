@@ -7,7 +7,7 @@
 #define tankLBOT D3
 #define tankRTOP D6
 #define tankRBOT D5
-#define MAXPERCENT 0.95
+#define MAXPERCENT 0.90
 #define MINPERCENT 0.20
 
 
@@ -16,11 +16,11 @@ int bits = 4095;
 float conversion = VCC / bits;
 volatile float percentFullL;
 volatile float percentFullR;
-const float fertPercent = 10.0;
+const float fertPercent = .50;
 
 enum TankState {FILL, EMPTY} tankLeft, tankRight;
-enum SourceValveState {OPEN, CLOSE} waterSource, fertilizerSource;
-enum SystemState {FILL_RIGHT, FILL_LEFT} systemState;
+enum SourceValveState {CLOSE, OPEN} waterSource, fertilizerSource;
+enum SystemState {FILL_FERT_RIGHT, FILL_WATER_RIGHT, RIGHT_FULL_WAIT, FILL_FERT_LEFT, FILL_WATER_LEFT,LEFT_FULL_WAIT} systemState;
 
 // the setup routine runs once when you press reset:
 void setup() {
@@ -34,7 +34,8 @@ void setup() {
   tankRight = EMPTY;
   waterSource = CLOSE;
   fertilizerSource = CLOSE;
-  systemState = FILL_RIGHT;
+  systemState = FILL_FERT_RIGHT;
+  tankValveSwitch(1);
 
   pinMode(tankLTOP, OUTPUT);
   pinMode(tankLBOT, OUTPUT);
@@ -56,7 +57,9 @@ void loop() {
   // print out the value you read:
   Serial.print("VL: " + String(voltageL) + " VR: " + String(voltageR));
   Serial.print(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
-  Serial.println(" State: " + String(systemState));
+  Serial.print(" State: " + String(systemState));
+  Serial.print(" FertSource: " + String(fertilizerSource));
+  Serial.println(" WaterSource: " + String(waterSource));
 
   systemStateMachine();
 
@@ -64,19 +67,54 @@ void loop() {
 
 void systemStateMachine() {
   switch (systemState) {
-    case FILL_RIGHT:
-      tankValveSwitch(1);
-      fillTank(1);
-      if (percentFullL < MINPERCENT)
-        systemState = FILL_LEFT;
+
+    case FILL_FERT_RIGHT:
+      fertilizerSource = OPEN;
+      waterSource = CLOSE;
+      if (percentFullR >= fertPercent)
+        systemState = FILL_WATER_RIGHT;
+      break;
+    
+    case FILL_WATER_RIGHT:
+      fertilizerSource = CLOSE;
+      waterSource = OPEN;
+      if (percentFullR >= MAXPERCENT)
+        systemState = RIGHT_FULL_WAIT;
+      break;
+    
+    case RIGHT_FULL_WAIT:
+      fertilizerSource = CLOSE;
+      waterSource = CLOSE;
+      if (percentFullL < MINPERCENT){
+        systemState = FILL_FERT_LEFT;
+        tankValveSwitch(0);
+      }
       break;
 
-    case FILL_LEFT:
-      tankValveSwitch(0);
-      fillTank(0);
-      if (percentFullR < MINPERCENT)
-        systemState = FILL_RIGHT;
+    case FILL_FERT_LEFT:
+      fertilizerSource = OPEN;
+      waterSource = CLOSE;
+      if (percentFullL >= fertPercent)
+        systemState = FILL_WATER_LEFT;
       break;
+
+    case FILL_WATER_LEFT:
+      fertilizerSource = CLOSE;
+      waterSource = OPEN;
+      if (percentFullL >= MAXPERCENT)
+        systemState = LEFT_FULL_WAIT;
+      break;
+
+    case LEFT_FULL_WAIT:
+      fertilizerSource = CLOSE;
+      waterSource = CLOSE;
+      if (percentFullR < MINPERCENT){
+        systemState = FILL_FERT_RIGHT;
+        tankValveSwitch(1);
+      }
+      break;
+    break;
+
     default:
         waterSource = CLOSE;
         fertilizerSource = CLOSE;
@@ -84,30 +122,17 @@ void systemStateMachine() {
   }
 }
 
-void fillTank(bool LeftOrRight) {
-  if(LeftOrRight?percentFullR:percentFullL <= fertPercent){
-    fertilizerSource = OPEN;
-    waterSource = CLOSE;
-  }
-  if(LeftOrRight?percentFullR:percentFullL <= MAXPERCENT){
-    fertilizerSource = CLOSE;
-    waterSource = OPEN;
-  }
-  fertilizerSource = CLOSE;
-  waterSource = CLOSE;
-}
-
 void tankValveSwitch(bool LeftOrRight){
   if (LeftOrRight){
-    digitalWrite(tankLTOP, HIGH);
-    digitalWrite(tankLBOT, LOW);
-    digitalWrite(tankRTOP, LOW);
-    digitalWrite(tankRBOT, HIGH);
-  }
-  else{
     digitalWrite(tankLTOP, LOW);
     digitalWrite(tankLBOT, HIGH);
     digitalWrite(tankRTOP, HIGH);
     digitalWrite(tankRBOT, LOW);
+  }
+  else{
+    digitalWrite(tankLTOP, HIGH);
+    digitalWrite(tankLBOT, LOW);
+    digitalWrite(tankRTOP, LOW);
+    digitalWrite(tankRBOT, HIGH);
   }
 }
