@@ -7,8 +7,8 @@
 #define tankLBOT D3
 #define tankRTOP D6
 #define tankRBOT D5
-#define MAXPERCENT 95.0
-#define MINPERCENT 1.0
+#define MAXPERCENT 0.95
+#define MINPERCENT 0.20
 
 
 float VCC = 3.3;
@@ -54,7 +54,9 @@ void loop() {
   float voltageR = sensorValueR * conversion;
   float voltageL = sensorValueL * conversion;
   // print out the value you read:
-  Serial.println("Voltage Left: " + String(voltageL) + " Voltage Right: " + String(voltageR));
+  Serial.print("VL: " + String(voltageL) + " VR: " + String(voltageR));
+  Serial.print(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
+  Serial.println(" State: " + String(systemState));
 
   systemStateMachine();
 
@@ -65,14 +67,14 @@ void systemStateMachine() {
     case FILL_RIGHT:
       tankValveSwitch(1);
       fillTank(1);
-      if (percentFullR < MINPERCENT)
+      if (percentFullL < MINPERCENT)
         systemState = FILL_LEFT;
       break;
 
     case FILL_LEFT:
       tankValveSwitch(0);
       fillTank(0);
-      if (percentFullL < MINPERCENT)
+      if (percentFullR < MINPERCENT)
         systemState = FILL_RIGHT;
       break;
     default:
