@@ -32,7 +32,7 @@ void setup() {
   Serial.begin(9600);
 
   // Setting some initial value
-  percentFullL = 100.0;
+  percentFullL = 1.0;
   percentFullR = 0.0;
 
   // TODO: initialize by reading sensors
