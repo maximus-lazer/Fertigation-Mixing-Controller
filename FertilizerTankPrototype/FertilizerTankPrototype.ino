@@ -1,6 +1,6 @@
 /*
 */
-#include "<ArduinoLowPower.h>"
+// #include "ArduinoLowPower.h"
 // Define Tank PINS
 #define tankLTOP D4
 #define tankLBOT D3
@@ -8,6 +8,10 @@
 #define tankRBOT D5
 #define waterPIN D7
 #define fertilizerPIN D8
+#define sleep D11
+
+#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+
 
 #define MAXPERCENT 0.85 // Percent threshold for full Tank
 #define MINPERCENT 0.20 // Percent threshold for empty Tank
@@ -22,11 +26,13 @@ int startBit = 0;
 
 int sensorValueR = 0;
 int sensorValueL = 0;
+volatile float voltageR = 0;
+volatile float voltageL = 0;
 volatile float percentFullL; // Percent threshold when Left Tank is full
 volatile float percentFullR; // Percent threshold when Right Tank is full
 
 enum SourceValveState {CLOSE, OPEN} waterSource, fertilizerSource;
-enum SystemState {WAIT_FOR_START, FERT_INPUT, ACTIVE, SETUP, ERROR} systemState;
+enum SystemState {WAIT_FOR_START, FERT_INPUT, ACTIVE, SETUP, ERROR} systemState, preErrorState;
 enum TankState {FILL_FERT_RIGHT, FILL_WATER_RIGHT, RIGHT_FULL_WAIT, FILL_FERT_LEFT, FILL_WATER_LEFT,LEFT_FULL_WAIT} tankState;
 
 /**
@@ -36,6 +42,8 @@ void setup() {
   // initialize serial communication at 9600 bits per second:
   Serial.begin(9600);
 
+  systemState = WAIT_FOR_START;
+
   // Initializing pins
   pinMode(tankLTOP, OUTPUT);
   pinMode(tankLBOT, OUTPUT);
@@ -43,6 +51,8 @@ void setup() {
   pinMode(tankRBOT, OUTPUT);
   pinMode(waterPIN, OUTPUT);
   pinMode(fertilizerPIN, OUTPUT);
+  pinMode(sleep, INPUT); // High = Active, Low = Sleep
+
 }
 
 /**
@@ -57,16 +67,6 @@ void loop() {
   percentFullL = sensorValueL/4095.0;
   percentFullR = sensorValueR/4095.0;
 
-  float voltageR = sensorValueR * conversion;
-  float voltageL = sensorValueL * conversion;
-
-  // print out the value you read:
-  Serial.print("VL: " + String(voltageL) + " VR: " + String(voltageR));
-  Serial.print(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
-  Serial.print(" State: " + String(systemState));
-  Serial.print(" FertSource: " + String(fertilizerSource));
-  Serial.println(" WaterSource: " + String(waterSource));
-
   // Running state machine
   systemStateMachine();
 }
@@ -74,42 +74,55 @@ void loop() {
 void systemStateMachine() {
   switch (systemState) {
     case WAIT_FOR_START:
-      sensorValueR = analogRead(A0);
-      sensorValueL = analogRead(A1);
-
-      if((sensorValueR > 3500)&& sensorValueL < 500){
+      if((percentFullR > MAXPERCENT)&&(percentFullL < MINPERCENT)){
         tankState = FILL_FERT_RIGHT;
+        systemState = FERT_INPUT;
         tankValveSwitch(1);
-      }else if((sensorValueL > 3500)&& sensorValueR < 500){
+      }else if((percentFullL > MAXPERCENT)&&(percentFullR < MINPERCENT)){
         tankState = FILL_FERT_LEFT;
+        systemState = FERT_INPUT;
         tankValveSwitch(0);
       }else {
         Serial.print("Set the potentiometers to a starting state");
-        Serial.println(" ValueL: " + String(sensorValueL) + " ValueR: " + String(sensorValueR));
+        Serial.println(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
       }
       waterSource = CLOSE;
       fertilizerSource = CLOSE;
 
-      if(startBit == 1) // Will be interrupts - Wake up and set state
-        systemState = FERT_INPUT;
+      // if(startBit == 1) // Will be interrupts - Wake up and set state
+      //   systemState = FERT_INPUT;
 
 
       break;
     case FERT_INPUT:
       //Start timer - Every two minutes
       //Start interrupt - For when bit goes low
+      systemState = ACTIVE;
       break;
     case ACTIVE:
       tankStateMachine();
 
-      if(startBit == 0)
+      voltageR = sensorValueR * conversion;
+      voltageL = sensorValueL * conversion;
+      
+      // print out the value you read:
+      Serial.print("VL: " + String(voltageL) + " VR: " + String(voltageR));
+      Serial.print(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
+      Serial.print(" TankState: " + String(tankState));
+      Serial.print(" SystemState: " + String(systemState));
+      Serial.print(" FertSource: " + String(fertilizerSource));
+      Serial.println(" WaterSource: " + String(waterSource));
+      
+      // if(startBit == 0)
+      //   systemState = SETUP;
+      if(digitalRead(sleep) == 0)
         systemState = SETUP;
-
+      
       break;
     case SETUP:
-
-
       // Put in Deep Sleep
+      esp_sleep_enable_timer_wakeup(5 * uS_TO_S_FACTOR);
+      esp_deep_sleep_start();
       break;
     case ERROR:
 
