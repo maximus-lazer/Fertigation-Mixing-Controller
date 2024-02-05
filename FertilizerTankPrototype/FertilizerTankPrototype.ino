@@ -7,6 +7,8 @@
 #define tankLBOT D3
 #define tankRTOP D6
 #define tankRBOT D5
+#define waterPIN D7
+#define fertilizerPIN D8
 
 #define MAXPERCENT 0.90 // Percent threshold for full Tank
 #define MINPERCENT 0.20 // Percent threshold for empty Tank
@@ -32,7 +34,7 @@ void setup() {
   Serial.begin(9600);
 
   // Setting some initial value
-  percentFullL = 100.0;
+  percentFullL = 1.0;
   percentFullR = 0.0;
 
   // TODO: initialize by reading sensors
@@ -48,6 +50,8 @@ void setup() {
   pinMode(tankLBOT, OUTPUT);
   pinMode(tankRTOP, OUTPUT);
   pinMode(tankRBOT, OUTPUT);
+  pinMode(waterPIN, OUTPUT);
+  pinMode(fertilizerPIN, OUTPUT);
 }
 
 /**
@@ -86,6 +90,8 @@ void systemStateMachine() {
     case FILL_FERT_RIGHT:
       fertilizerSource = OPEN;
       waterSource = CLOSE;
+      digitalWrite(fertilizerPIN, HIGH);
+      digitalWrite(waterPIN, LOW);
       if (percentFullR >= fertPercent)
         systemState = FILL_WATER_RIGHT;
       break;
@@ -94,6 +100,8 @@ void systemStateMachine() {
     case FILL_WATER_RIGHT:
       fertilizerSource = CLOSE;
       waterSource = OPEN;
+      digitalWrite(fertilizerPIN, LOW);
+      digitalWrite(waterPIN, HIGH);
       if (percentFullR >= MAXPERCENT)
         systemState = RIGHT_FULL_WAIT;
       break;
@@ -102,6 +110,8 @@ void systemStateMachine() {
     case RIGHT_FULL_WAIT:
       fertilizerSource = CLOSE;
       waterSource = CLOSE;
+      digitalWrite(fertilizerPIN, LOW);
+      digitalWrite(waterPIN, LOW);
       if (percentFullL < MINPERCENT){
         systemState = FILL_FERT_LEFT;
         tankValveSwitch(0);
@@ -112,6 +122,8 @@ void systemStateMachine() {
     case FILL_FERT_LEFT:
       fertilizerSource = OPEN;
       waterSource = CLOSE;
+      digitalWrite(fertilizerPIN, HIGH);
+      digitalWrite(waterPIN, LOW);
       if (percentFullL >= fertPercent)
         systemState = FILL_WATER_LEFT;
       break;
@@ -120,6 +132,8 @@ void systemStateMachine() {
     case FILL_WATER_LEFT:
       fertilizerSource = CLOSE;
       waterSource = OPEN;
+      digitalWrite(fertilizerPIN, LOW);
+      digitalWrite(waterPIN, HIGH);
       if (percentFullL >= MAXPERCENT)
         systemState = LEFT_FULL_WAIT;
       break;
@@ -128,6 +142,8 @@ void systemStateMachine() {
     case LEFT_FULL_WAIT:
       fertilizerSource = CLOSE;
       waterSource = CLOSE;
+      digitalWrite(fertilizerPIN, LOW);
+      digitalWrite(waterPIN, LOW);
       if (percentFullR < MINPERCENT) {
         systemState = FILL_FERT_RIGHT;
         tankValveSwitch(1);
@@ -139,6 +155,8 @@ void systemStateMachine() {
     default:
         waterSource = CLOSE;
         fertilizerSource = CLOSE;
+        digitalWrite(fertilizerPIN, LOW);
+      digitalWrite(waterPIN, LOW);
       break;
   }
 }
