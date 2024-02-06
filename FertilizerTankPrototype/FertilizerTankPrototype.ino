@@ -23,6 +23,7 @@ const float conversion = VCC / bits; // Conversion multiplier for converting ana
 float fertPercent = .40; // Percent threshold for filling fertilizer TODO: Change this to read from controller DIO
 
 int startBit = 0;
+unsigned long timer;
 
 int sensorValueR = 0;
 int sensorValueL = 0;
@@ -31,8 +32,9 @@ volatile float voltageL = 0;
 volatile float percentFullL; // Percent threshold when Left Tank is full
 volatile float percentFullR; // Percent threshold when Right Tank is full
 
+enum ErrorType {FLOAT_READ} err;
 enum SourceValveState {CLOSE, OPEN} waterSource, fertilizerSource;
-enum SystemState {WAIT_FOR_START, FERT_INPUT, ACTIVE, SETUP, ERROR} systemState, preErrorState;
+enum SystemState {WAIT_FOR_START, FERT_INPUT, ACTIVE, SLEEP, ERROR} systemState, preErrorState;
 enum TankState {FILL_FERT_RIGHT, FILL_WATER_RIGHT, RIGHT_FULL_WAIT, FILL_FERT_LEFT, FILL_WATER_LEFT,LEFT_FULL_WAIT} tankState;
 
 /**
@@ -53,6 +55,7 @@ void setup() {
   pinMode(fertilizerPIN, OUTPUT);
   pinMode(sleep, INPUT); // High = Active, Low = Sleep
 
+  timer = millis();
 }
 
 /**
@@ -92,7 +95,6 @@ void systemStateMachine() {
       // if(startBit == 1) // Will be interrupts - Wake up and set state
       //   systemState = FERT_INPUT;
 
-
       break;
     case FERT_INPUT:
       //Start timer - Every two minutes
@@ -106,26 +108,28 @@ void systemStateMachine() {
       voltageL = sensorValueL * conversion;
       
       // print out the value you read:
-      Serial.print("VL: " + String(voltageL) + " VR: " + String(voltageR));
-      Serial.print(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
-      Serial.print(" TankState: " + String(tankState));
-      Serial.print(" SystemState: " + String(systemState));
-      Serial.print(" FertSource: " + String(fertilizerSource));
-      Serial.println(" WaterSource: " + String(waterSource));
-      
-      // if(startBit == 0)
-      //   systemState = SETUP;
-      if(digitalRead(sleep) == 0)
-        systemState = SETUP;
-      
+
+
+      if((millis()-timer) > 100){
+        timer = millis();
+        Serial.print("VL: " + String(voltageL) + " VR: " + String(voltageR));
+        Serial.print(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
+        Serial.print(" TankState: " + String(tankState));
+        Serial.print(" SystemState: " + String(systemState));
+        Serial.print(" FertSource: " + String(fertilizerSource));
+        Serial.println(" WaterSource: " + String(waterSource));
+      }
+      if((digitalRead(sleep) == 0)&& tankFull())
+          systemState = SLEEP;
+
       break;
-    case SETUP:
+    case SLEEP:
       // Put in Deep Sleep
       esp_sleep_enable_timer_wakeup(5 * uS_TO_S_FACTOR);
       esp_deep_sleep_start();
       break;
     case ERROR:
-
+      errorHandler();
       break;
     default:
 
@@ -133,13 +137,11 @@ void systemStateMachine() {
   }
 }
 
-
 /**
 * The state machine for the entire system
 */
 void tankStateMachine() {
   switch (tankState) {
-
     // Filling Right Tank to Fertilizer percentage
     case FILL_FERT_RIGHT:
       fertilizerSource = OPEN;
@@ -168,6 +170,7 @@ void tankStateMachine() {
       digitalWrite(waterPIN, LOW);
       if (percentFullL < MINPERCENT){
         tankState = FILL_FERT_LEFT;
+      
         tankValveSwitch(0);
       }
       break;
@@ -200,6 +203,7 @@ void tankStateMachine() {
       digitalWrite(waterPIN, LOW);
       if (percentFullR < MINPERCENT) {
         tankState = FILL_FERT_RIGHT;
+
         tankValveSwitch(1);
       }
       break;
@@ -231,5 +235,23 @@ void tankValveSwitch(bool LeftOrRight) {
     digitalWrite(tankLBOT, LOW);
     digitalWrite(tankRTOP, LOW);
     digitalWrite(tankRBOT, HIGH);
+  }
+}
+
+bool tankFull(){
+  if((percentFullR > MAXPERCENT)&&(percentFullL < MINPERCENT))
+    return true;
+  else if((percentFullL > MAXPERCENT)&&(percentFullR < MINPERCENT))
+    return true;
+  else
+    return false;
+}
+
+void errorHandler(){
+  switch(err){
+    case FLOAT_READ:
+      break;
+    default:
+      break;
   }
 }
