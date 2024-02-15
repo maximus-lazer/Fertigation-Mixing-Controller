@@ -1,7 +1,6 @@
-/*
-*/
-//#include "ArduinoLowPower.h"
-//#include "esp_sleep.h"
+#include <list>
+#include <numeric> // for std::accumulate
+
 // Define Tank PINS
 #define tankLTOP D4
 #define tankLBOT D3
@@ -12,6 +11,8 @@
 #define sleep D2
 #define topValvesIn1 D10
 #define topValvesIn2 D9
+#define floatSensorL A1
+#define floatSensorR A0
 
 #define PIN_BITMASK (1<<5)
 
@@ -30,16 +31,20 @@ float fertPercent = .40; // Percent threshold for filling fertilizer TODO: Chang
 
 int startBit = 0;
 unsigned long timer;
+unsigned long errTimer;
+unsigned long currentTime;
+const int errWaitTime = 30 * 1000; // sec * 1000ms/sec = ms
 const int pulse = 100;
 
-int sensorValueR = 0;
-int sensorValueL = 0;
+volatile int sensorValueR = 0;
+volatile int sensorValueL = 0;
 volatile float voltageR = 0;
 volatile float voltageL = 0;
-volatile float percentFullL; // Percent threshold when Left Tank is full
-volatile float percentFullR; // Percent threshold when Right Tank is full
+volatile float percentFullL; // Percent of left tank
+volatile float percentFullR; // Percent of right tank
+std::list<int> floatLeft, floatRight;
 
-enum ErrorType {FLOAT_READ} err;
+enum ErrorType {FLOAT_HIGH_BROKEN_LEFT, FLOAT_HIGH_LEFT, FLOAT_LOW_LEFT, FLOAT_NO_CHANGE_LEFT, FLOAT_HIGH_BROKEN_RIGHT, FLOAT_HIGH_RIGHT, FLOAT_LOW_RIGHT, FLOAT_NO_CHANGE_RIGHT, } err;
 enum SourceValveState {CLOSE, OPEN} waterSource, fertilizerSource;
 enum SystemState {WAIT_FOR_START, FERT_INPUT, ACTIVE, SLEEP, ERROR} systemState, preErrorState;
 enum TankState {FILL_FERT_RIGHT, FILL_WATER_RIGHT, RIGHT_FULL_WAIT, FILL_FERT_LEFT, FILL_WATER_LEFT,LEFT_FULL_WAIT} tankState;
@@ -65,6 +70,7 @@ void setup() {
   pinMode(topValvesIn2, OUTPUT);
 
   timer = millis();
+  errTimer = millis();
 }
 
 /**
@@ -73,8 +79,8 @@ void setup() {
 void loop() {
 
   // read the input on analog pin 0 & 1:
-  int sensorValueR = analogRead(A0);
-  int sensorValueL = analogRead(A1);
+  sensorValueR = analogRead(floatSensorR);
+  sensorValueL = analogRead(floatSensorL);
 
   percentFullL = sensorValueL/MAXBITS;
   percentFullR = sensorValueR/MAXBITS;
@@ -84,6 +90,7 @@ void loop() {
 
   // Running state machine
   systemStateMachine();
+  errorChecking();
 }
 
 void systemStateMachine() {
@@ -147,7 +154,8 @@ void systemStateMachine() {
       esp_deep_sleep_start();
       break;
     case ERROR:
-      errorHandler();
+
+      // errorHandler();
       break;
     default:
 
@@ -270,7 +278,7 @@ void tankValveSwitch(bool LeftOrRight) {
   }
 }
 
-bool tankFull(){
+bool tankFull() {
   if((percentFullR > MAXPERCENT)&&(percentFullL < MINPERCENT))
     return true;
   else if((percentFullL > MAXPERCENT)&&(percentFullR < MINPERCENT))
@@ -279,10 +287,121 @@ bool tankFull(){
     return false;
 }
 
+void errorChecking() {
+
+  currentTime = millis();
+  if (currentTime - errTimer >= errWaitTime) {
+
+    // 
+    if (floatLeft.size() == 5) floatLeft.pop_front();
+    if (floatRight.size() == 5) floatRight.pop_front();
+    floatLeft.push_back(int(sensorValueL));
+    floatRight.push_back(int(sensorValueR));
+
+    if (floatLeft.size() == 5) {
+      float avg = std::accumulate(floatLeft.begin(), floatRight.end(), 0.0) / floatLeft.size();
+      
+      // LOW when Filling-Full
+      if (avg == 0 && systemState >= FILL_FERT_LEFT ) {
+        err = FLOAT_LOW_LEFT;
+        errorHandler();
+      }
+
+      // Sensor too high / broken
+      else if (avg >= bits && systemState < FILL_FERT_LEFT ) {
+        err = FLOAT_HIGH_BROKEN_LEFT;
+        errorHandler();
+      }
+
+      // High when emtying
+      else if (avg == MAXBITS && systemState < FILL_FERT_LEFT ) {
+        err = FLOAT_HIGH_LEFT;
+        errorHandler();
+      }
+
+      // Not changing
+      else if (abs(floatLeft.front() - floatLeft.back()) <= 10 && systemState >= FILL_FERT_LEFT ) {
+        err = FLOAT_NO_CHANGE_LEFT;
+        errorHandler();
+      }
+
+    }
+
+    if (floatRight.size() == 5) {
+      float avg = std::accumulate(floatRight.begin(), floatRight.end(), 0.0) / floatRight.size();
+      
+      // LOW when Filling-Full
+      if (avg == 0 && systemState < FILL_FERT_LEFT ) {
+        err = FLOAT_LOW_RIGHT;
+        errorHandler();
+      }
+
+      // Sensor too high / broken
+      else if (avg >= bits && systemState >= FILL_FERT_LEFT ) {
+        err = FLOAT_HIGH_BROKEN_RIGHT;
+        errorHandler();
+      }
+
+      // High when emtying
+      else if (avg == MAXBITS && systemState >= FILL_FERT_LEFT ) {
+        err = FLOAT_HIGH_RIGHT;
+        errorHandler();
+      }
+
+      // Not changing
+      else if (abs(floatRight.front() - floatRight.back()) <= 10 && systemState < FILL_FERT_LEFT ) {
+        err = FLOAT_NO_CHANGE_RIGHT;
+        errorHandler();
+      }
+
+    }
+
+    errTimer = currentTime;
+  }
+}
+
 void errorHandler(){
   switch(err){
-    case FLOAT_READ:
-      break;
+
+      case FLOAT_HIGH_BROKEN_LEFT:
+        Serial.print("ERROR: LEFT FLOAT NOT FOUND");
+
+        break;
+      
+      case FLOAT_HIGH_LEFT:
+        Serial.print("ERROR: LEFT FLOAT STUCK HIGH");
+
+        break;
+        
+      case FLOAT_LOW_LEFT:
+        Serial.print("ERROR: LEFT FLOAT STUCK LOW");
+
+        break;
+        
+      case FLOAT_NO_CHANGE_LEFT:
+        Serial.print("ERROR: LEFT FLOAT NOT MOVING");
+
+        break;
+        
+      case FLOAT_HIGH_BROKEN_RIGHT:
+        Serial.print("ERROR: RIGHT FLOAT NOT FOUND");
+
+        break;
+        
+      case FLOAT_HIGH_RIGHT:
+        Serial.print("ERROR: RIGHT FLOAT STUCK HIGH");
+
+        break;
+        
+      case FLOAT_LOW_RIGHT:
+        Serial.print("ERROR: RIGHT FLOAT STUCK LOW");
+
+        break;
+        
+      case FLOAT_NO_CHANGE_RIGHT:
+        Serial.print("ERROR: RIGHT FLOAT NOT MOVING");
+
+        break;
     default:
       break;
   }
