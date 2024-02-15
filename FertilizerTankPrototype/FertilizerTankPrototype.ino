@@ -121,7 +121,6 @@ void systemStateMachine() {
       
       // print out the value you read:
 
-
       if((millis()-timer) > 500){
         timer = millis();
         Serial.print("VL: " + String(voltageL) + " VR: " + String(voltageR));
@@ -219,13 +218,12 @@ void tankStateMachine() {
         tankValveSwitch(1);
       }
       break;
-    break;
 
     // A default state if something goes wrong (should never get here)
     default:
-        waterSource = CLOSE;
-        fertilizerSource = CLOSE;
-        digitalWrite(fertilizerPIN, LOW);
+      waterSource = CLOSE;
+      fertilizerSource = CLOSE;
+      digitalWrite(fertilizerPIN, LOW);
       digitalWrite(waterPIN, LOW);
       break;
   }
