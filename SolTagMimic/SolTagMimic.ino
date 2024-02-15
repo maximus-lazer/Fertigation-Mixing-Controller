@@ -1,29 +1,31 @@
 
+#include <Arduino.h>
 
-
-
-
+#define start_Stop PD2
+#define fertInput PD3
 
 void setup() {
-  // set the digital pin as output:
-  pinMode(ledPin, OUTPUT);
+  Serial.begin(9600);
+  // put your setup code here, to run once:
+  pinMode(start_Stop, OUTPUT);
+  pinMode(fertInput, OUTPUT);
+
+  digitalWrite(start_Stop, LOW);
+  digitalWrite(fertInput, LOW);
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
-
-  if (currentMillis - previousMillis >= interval) {
-    // save the last time you blinked the LED
-    previousMillis = currentMillis;
-
-    // if the LED is off turn it on and vice-versa:
-    if (ledState == LOW) {
-      ledState = HIGH;
-    } else {
-      ledState = LOW;
-    }
-
-    // set the LED with the ledState of the variable:
-    digitalWrite(ledPin, ledState);
+  // put your main code here, to run repeatedly:
+  digitalWrite(start_Stop, LOW);
+  Serial.println("\nLOW");
+  for(int i = 10; i > 0; i--){
+    Serial.print(String(i)+" ");
+    delay(1000);
+  }
+  digitalWrite(start_Stop, HIGH);
+  Serial.println("\nHIGH");
+   for(int i = 20; i > 0; i--){
+    Serial.print(String(i)+" ");
+    delay(1000);
   }
 }
