@@ -1,6 +1,7 @@
 /*
 */
-// #include "ArduinoLowPower.h"
+//#include "ArduinoLowPower.h"
+//#include "esp_sleep.h"
 // Define Tank PINS
 #define tankLTOP D4
 #define tankLBOT D3
@@ -8,16 +9,18 @@
 #define tankRBOT D5
 #define waterPIN D7
 #define fertilizerPIN D8
-#define sleep D11
+#define sleep D2
 #define topValvesIn1 D10
 #define topValvesIn2 D9
+
+#define PIN_BITMASK (1<<5)
 
 
 #define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
 
 #define MAXBITS 1520.0
 #define MAXPERCENT 0.90 // Percent threshold for full Tank
-#define MINPERCENT 0.20 // Percent threshold for empty Tank
+#define MINPERCENT 0.10 // Percent threshold for empty Tank
 
 // Defining constants
 const float VCC = 3.3; // VCC output voltage from pins
@@ -121,6 +124,7 @@ void systemStateMachine() {
       
       // print out the value you read:
 
+
       if((millis()-timer) > 500){
         timer = millis();
         Serial.print("VL: " + String(voltageL) + " VR: " + String(voltageR));
@@ -136,7 +140,10 @@ void systemStateMachine() {
       break;
     case SLEEP:
       // Put in Deep Sleep
-      esp_sleep_enable_timer_wakeup(5 * uS_TO_S_FACTOR);
+      //esp_deep_sleep_enable_gpio_wakeup(PIN_BITMASK, 1);
+      //esp_sleep_enable_ext0_wakeup(GPIO_NUM_38, HIGH);
+      esp_sleep_enable_ext1_wakeup(PIN_BITMASK, ESP_EXT1_WAKEUP_ANY_HIGH);
+      //esp_sleep_enable_timer_wakeup(5*uS_TO_S_FACTOR);
       esp_deep_sleep_start();
       break;
     case ERROR:
@@ -218,12 +225,13 @@ void tankStateMachine() {
         tankValveSwitch(1);
       }
       break;
+    break;
 
     // A default state if something goes wrong (should never get here)
     default:
-      waterSource = CLOSE;
-      fertilizerSource = CLOSE;
-      digitalWrite(fertilizerPIN, LOW);
+        waterSource = CLOSE;
+        fertilizerSource = CLOSE;
+        digitalWrite(fertilizerPIN, LOW);
       digitalWrite(waterPIN, LOW);
       break;
   }
