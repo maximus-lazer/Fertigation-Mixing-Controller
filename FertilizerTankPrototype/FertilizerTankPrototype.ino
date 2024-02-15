@@ -1,28 +1,41 @@
 /*
-
 */
-
+// #include "ArduinoLowPower.h"
 // Define Tank PINS
 #define tankLTOP D4
 #define tankLBOT D3
 #define tankRTOP D6
 #define tankRBOT D5
+#define waterPIN D7
+#define fertilizerPIN D8
+#define sleep D11
 
-#define MAXPERCENT 0.90 // Percent threshold for full Tank
+#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+
+
+#define MAXPERCENT 0.85 // Percent threshold for full Tank
 #define MINPERCENT 0.20 // Percent threshold for empty Tank
 
 // Defining constants
 const float VCC = 3.3; // VCC output voltage from pins
 const int bits = 4095; // 2^(16)-1 bits for ADC
 const float conversion = VCC / bits; // Conversion multiplier for converting analog input to voltage
-const float fertPercent = .50; // Percent threshold for filling fertilizer TODO: Change this to read from controller DIO
+float fertPercent = .40; // Percent threshold for filling fertilizer TODO: Change this to read from controller DIO
 
+int startBit = 0;
+unsigned long timer;
+
+int sensorValueR = 0;
+int sensorValueL = 0;
+volatile float voltageR = 0;
+volatile float voltageL = 0;
 volatile float percentFullL; // Percent threshold when Left Tank is full
 volatile float percentFullR; // Percent threshold when Right Tank is full
 
-enum TankState {FILL, EMPTY} tankLeft, tankRight;
+enum ErrorType {FLOAT_READ} err;
 enum SourceValveState {CLOSE, OPEN} waterSource, fertilizerSource;
-enum SystemState {FILL_FERT_RIGHT, FILL_WATER_RIGHT, RIGHT_FULL_WAIT, FILL_FERT_LEFT, FILL_WATER_LEFT,LEFT_FULL_WAIT} systemState;
+enum SystemState {WAIT_FOR_START, FERT_INPUT, ACTIVE, SLEEP, ERROR} systemState, preErrorState;
+enum TankState {FILL_FERT_RIGHT, FILL_WATER_RIGHT, RIGHT_FULL_WAIT, FILL_FERT_LEFT, FILL_WATER_LEFT,LEFT_FULL_WAIT} tankState;
 
 /**
  * Runs once controller turns on or resets
@@ -31,29 +44,25 @@ void setup() {
   // initialize serial communication at 9600 bits per second:
   Serial.begin(9600);
 
-  // Setting some initial value
-  percentFullL = 100.0;
-  percentFullR = 0.0;
-
-  // TODO: initialize by reading sensors
-  tankLeft = FILL;
-  tankRight = EMPTY;
-  waterSource = CLOSE;
-  fertilizerSource = CLOSE;
-  systemState = FILL_FERT_RIGHT;
-  tankValveSwitch(1);
+  systemState = WAIT_FOR_START;
 
   // Initializing pins
   pinMode(tankLTOP, OUTPUT);
   pinMode(tankLBOT, OUTPUT);
   pinMode(tankRTOP, OUTPUT);
   pinMode(tankRBOT, OUTPUT);
+  pinMode(waterPIN, OUTPUT);
+  pinMode(fertilizerPIN, OUTPUT);
+  pinMode(sleep, INPUT); // High = Active, Low = Sleep
+
+  timer = millis();
 }
 
 /**
  * Runs while controller is on
  */
 void loop() {
+
   // read the input on analog pin 0 & 1:
   int sensorValueR = analogRead(A0);
   int sensorValueL = analogRead(A1);
@@ -61,49 +70,107 @@ void loop() {
   percentFullL = sensorValueL/4095.0;
   percentFullR = sensorValueR/4095.0;
 
-  float voltageR = sensorValueR * conversion;
-  float voltageL = sensorValueL * conversion;
-
-  // print out the value you read:
-  Serial.print("VL: " + String(voltageL) + " VR: " + String(voltageR));
-  Serial.print(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
-  Serial.print(" State: " + String(systemState));
-  Serial.print(" FertSource: " + String(fertilizerSource));
-  Serial.println(" WaterSource: " + String(waterSource));
-
   // Running state machine
   systemStateMachine();
+}
 
+void systemStateMachine() {
+  switch (systemState) {
+    case WAIT_FOR_START:
+      if((percentFullR > MAXPERCENT)&&(percentFullL < MINPERCENT)){
+        tankState = FILL_FERT_RIGHT;
+        systemState = FERT_INPUT;
+        tankValveSwitch(1);
+      }else if((percentFullL > MAXPERCENT)&&(percentFullR < MINPERCENT)){
+        tankState = FILL_FERT_LEFT;
+        systemState = FERT_INPUT;
+        tankValveSwitch(0);
+      }else {
+        Serial.print("Set the potentiometers to a starting state");
+        Serial.println(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
+      }
+      waterSource = CLOSE;
+      fertilizerSource = CLOSE;
+
+      // if(startBit == 1) // Will be interrupts - Wake up and set state
+      //   systemState = FERT_INPUT;
+
+      break;
+    case FERT_INPUT:
+      //Start timer - Every two minutes
+      //Start interrupt - For when bit goes low
+      systemState = ACTIVE;
+      break;
+    case ACTIVE:
+      tankStateMachine();
+
+      voltageR = sensorValueR * conversion;
+      voltageL = sensorValueL * conversion;
+      
+      // print out the value you read:
+
+
+      if((millis()-timer) > 100){
+        timer = millis();
+        Serial.print("VL: " + String(voltageL) + " VR: " + String(voltageR));
+        Serial.print(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
+        Serial.print(" TankState: " + String(tankState));
+        Serial.print(" SystemState: " + String(systemState));
+        Serial.print(" FertSource: " + String(fertilizerSource));
+        Serial.println(" WaterSource: " + String(waterSource));
+      }
+      if((digitalRead(sleep) == 0)&& tankFull())
+          systemState = SLEEP;
+
+      break;
+    case SLEEP:
+      // Put in Deep Sleep
+      esp_sleep_enable_timer_wakeup(5 * uS_TO_S_FACTOR);
+      esp_deep_sleep_start();
+      break;
+    case ERROR:
+      errorHandler();
+      break;
+    default:
+
+      break;
+  }
 }
 
 /**
 * The state machine for the entire system
 */
-void systemStateMachine() {
-  switch (systemState) {
-
+void tankStateMachine() {
+  switch (tankState) {
     // Filling Right Tank to Fertilizer percentage
     case FILL_FERT_RIGHT:
       fertilizerSource = OPEN;
       waterSource = CLOSE;
+      digitalWrite(fertilizerPIN, HIGH);
+      digitalWrite(waterPIN, LOW);
       if (percentFullR >= fertPercent)
-        systemState = FILL_WATER_RIGHT;
+        tankState = FILL_WATER_RIGHT;
       break;
     
     // Filling rest of Right tank with water
     case FILL_WATER_RIGHT:
       fertilizerSource = CLOSE;
       waterSource = OPEN;
+      digitalWrite(fertilizerPIN, LOW);
+      digitalWrite(waterPIN, HIGH);
       if (percentFullR >= MAXPERCENT)
-        systemState = RIGHT_FULL_WAIT;
+        tankState = RIGHT_FULL_WAIT;
       break;
     
     // Waiting for Left Tank to empty
     case RIGHT_FULL_WAIT:
       fertilizerSource = CLOSE;
       waterSource = CLOSE;
+      digitalWrite(fertilizerPIN, LOW);
+      digitalWrite(waterPIN, LOW);
       if (percentFullL < MINPERCENT){
-        systemState = FILL_FERT_LEFT;
+        tankState = FILL_FERT_LEFT;
+      
         tankValveSwitch(0);
       }
       break;
@@ -112,24 +179,31 @@ void systemStateMachine() {
     case FILL_FERT_LEFT:
       fertilizerSource = OPEN;
       waterSource = CLOSE;
+      digitalWrite(fertilizerPIN, HIGH);
+      digitalWrite(waterPIN, LOW);
       if (percentFullL >= fertPercent)
-        systemState = FILL_WATER_LEFT;
+        tankState = FILL_WATER_LEFT;
       break;
 
     // Filling rest of Left tank with water
     case FILL_WATER_LEFT:
       fertilizerSource = CLOSE;
       waterSource = OPEN;
+      digitalWrite(fertilizerPIN, LOW);
+      digitalWrite(waterPIN, HIGH);
       if (percentFullL >= MAXPERCENT)
-        systemState = LEFT_FULL_WAIT;
+        tankState = LEFT_FULL_WAIT;
       break;
 
     // Waiting for Right Tank to empty
     case LEFT_FULL_WAIT:
       fertilizerSource = CLOSE;
       waterSource = CLOSE;
+      digitalWrite(fertilizerPIN, LOW);
+      digitalWrite(waterPIN, LOW);
       if (percentFullR < MINPERCENT) {
-        systemState = FILL_FERT_RIGHT;
+        tankState = FILL_FERT_RIGHT;
+
         tankValveSwitch(1);
       }
       break;
@@ -139,6 +213,8 @@ void systemStateMachine() {
     default:
         waterSource = CLOSE;
         fertilizerSource = CLOSE;
+        digitalWrite(fertilizerPIN, LOW);
+      digitalWrite(waterPIN, LOW);
       break;
   }
 }
@@ -159,5 +235,23 @@ void tankValveSwitch(bool LeftOrRight) {
     digitalWrite(tankLBOT, LOW);
     digitalWrite(tankRTOP, LOW);
     digitalWrite(tankRBOT, HIGH);
+  }
+}
+
+bool tankFull(){
+  if((percentFullR > MAXPERCENT)&&(percentFullL < MINPERCENT))
+    return true;
+  else if((percentFullL > MAXPERCENT)&&(percentFullR < MINPERCENT))
+    return true;
+  else
+    return false;
+}
+
+void errorHandler(){
+  switch(err){
+    case FLOAT_READ:
+      break;
+    default:
+      break;
   }
 }
