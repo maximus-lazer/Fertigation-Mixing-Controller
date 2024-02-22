@@ -1,10 +1,14 @@
 /*
-*/
-//#include "ArduinoLowPower.h"
-#include "esp_sleep.h"
-#include <list>
+ * TODO: Insert disclaimer
+ */
+
+// Libraries needed
+#include "esp_sleep.h" // For sleep modes
+#include <list> // For std::list
 #include <numeric> // for std::accumulate
-// Define Tank PINS
+#include <Preferences.h> // For storing data into flash
+
+// Define PINS
 #define transistor D12
 #define tankLTOP D4
 #define tankLBOT D11
@@ -23,15 +27,17 @@
 #define floatSensorL A1
 #define floatSensorR A0
 
+// Mask for SolTag input interupts
 #define soltagStartMask (1<<5)
 #define soltagFertMask (1<<6)
 
+// Bitmask with both SolTag inputs
 #define PIN_BITMASK soltagStartMask|soltagFertMask
 
 
 #define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
 
-#define MAXBITS 1520.0
+#define MAXBITS 1520.0 // Bit maximum for float sensors
 #define MAXPERCENT 0.85 // Percent threshold for full Tank
 #define MINPERCENT 0.20 // Percent threshold for empty Tank
 
@@ -39,22 +45,25 @@
 const float VCC = 3.3; // VCC output voltage from pins
 const int bits = 4095; // 2^(16)-1 bits for ADC
 const float conversion = VCC / bits; // Conversion multiplier for converting analog input to voltage
-float fertPercent = 0.50; // Percent threshold for filling fertilizer TODO: Change this to read from controller DIO
+const unsigned long errWaitTime = 5 * 1000; // sec * 1000ms/sec = ms
+const int errSize = 5; // Max size of error checking lists
+const int pulse = 100; // Pulse time for solenoid (ms)
 
 int startBit = 0;
 unsigned long timer;
 unsigned long errTimer;
 unsigned long currentTime;
-const int errWaitTime = 30 * 1000; // sec * 1000ms/sec = ms
-const int pulse = 100;
 
-int sensorValueR = 0;
-int sensorValueL = 0;
+uint16_t sensorValueR = 0;
+uint16_t sensorValueL = 0;
+float fertPercent = 0.0; // Percent threshold for filling fertilizer
+unsigned char storedFertValue; // Value of saved fertilizer percentage
 volatile float voltageR = 0;
 volatile float voltageL = 0;
 volatile float percentFullL; // Percent threshold when Left Tank is full
 volatile float percentFullR; // Percent threshold when Right Tank is full
-std::list<int> floatLeft, floatRight;
+std::list<int> floatLeft, floatRight; // Lists for left and right float sensors
+Preferences prefs;
 
 enum ErrorType {FLOAT_HIGH_BROKEN_LEFT, FLOAT_HIGH_LEFT, FLOAT_LOW_LEFT, FLOAT_NO_CHANGE_LEFT, FLOAT_HIGH_BROKEN_RIGHT, FLOAT_HIGH_RIGHT, FLOAT_LOW_RIGHT, FLOAT_NO_CHANGE_RIGHT, } err;
 enum SourceValveState {CLOSE, OPEN} waterSource, fertilizerSource;
@@ -69,7 +78,9 @@ void setup() {
   Serial.begin(9600);
 
   systemState = WAKE_UP;
-  // systemState = WAIT_FOR_START;
+
+  prefs.begin("Conteroller", false);  // Begin preferences (namespace, RW-mode)
+  storedFertValue = prefs.getUChar("Percentage", 0); // Get current fertilizer percentage
 
   // Initializing pins
   pinMode(transistor, OUTPUT);
@@ -98,8 +109,8 @@ void setup() {
 void loop() {
 
   // read the input on analog pin 0 & 1:
-  int sensorValueR = analogRead(floatSensorR);
-  int sensorValueL = analogRead(floatSensorL);
+  sensorValueR = analogRead(floatSensorR);
+  sensorValueL = analogRead(floatSensorL);
 
   percentFullL = sensorValueL/MAXBITS;
   percentFullR = sensorValueR/MAXBITS;
@@ -107,9 +118,14 @@ void loop() {
   if(percentFullL > 1.0){percentFullL = 1.0;}
   if(percentFullR > 1.0){percentFullR = 1.0;}
 
+  if((millis()-timer) > 5000){
+    timer = millis();
+    Serial.println("STORED FERT VALUE: " + String(storedFertValue));
+  }
+
   // Running state machine
   systemStateMachine();
-  errorChecking();
+  
 }
 
 void systemStateMachine() {
@@ -117,22 +133,31 @@ void systemStateMachine() {
     case WAKE_UP:
       if(digitalRead(fertInput) == 1){
         systemState = FERT_INPUT;
-        fertPercent = 0.02;
+        storedFertValue = 2;
       }
-      else if(digitalRead(sleep) == 1)
+      else if(digitalRead(sleep) == 1) {
         systemState = WAIT_FOR_START;
+        fertPercent = float(storedFertValue) / 100.0; // Convert stored char into percentage
+      }
+      // else
+      //   systemState = SLEEP;
+
       break;
     case FERT_INPUT:
       if((millis()-timer) > 1000){
         timer = millis();
         if(digitalRead(fertInput) == 1){
-          fertPercent += 0.02;
+          storedFertValue += 2;
+          storedFertValue = constrain(storedFertValue, 0, 100); // Keep value between 0 and 100
           Serial.println("FertPercent: " + String(fertPercent));
         }
-        else if(digitalRead(sleep) == 1)
-          systemState = WAIT_FOR_START;
-        // else
-        //   systemState = SLEEP;
+        else if(digitalRead(sleep) == 1) {
+           systemState = WAIT_FOR_START;
+           fertPercent = float(storedFertValue) / 100.0; // Convert stored char into percentage
+        }
+         
+        else
+          systemState = SLEEP;
       }
       break;
 
@@ -154,11 +179,12 @@ void systemStateMachine() {
           Serial.println(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
         }
       }
-      waterSource = CLOSE;
-      fertilizerSource = CLOSE;
+      
       break;
     case ACTIVE:
       tankStateMachine();
+      errorChecking();
+
       voltageR = sensorValueR * conversion;
       voltageL = sensorValueL * conversion;
 
@@ -172,14 +198,20 @@ void systemStateMachine() {
         Serial.print(" WaterSource: " + String(waterSource));
         Serial.println(" FertPercent: " + String(fertPercent));
       }
-      // if((digitalRead(sleep) == 0)&& tankFull())
-      //     systemState = SLEEP;
+      if((digitalRead(sleep) == 0)&& tankFull())
+          systemState = SLEEP;
 
       break;
     case SLEEP:
+      // Store value only if it is different (Same as update in EEPROM)
+      if (prefs.getUChar("Percentage", 0) != storedFertValue)
+        prefs.putUChar("Percentage", storedFertValue); // save current fert value
+      prefs.end(); // End preferences
+      
       // Put in Deep Sleep
-      // esp_sleep_enable_ext1_wakeup(PIN_BITMASK, ESP_EXT1_WAKEUP_ANY_HIGH);
-      // esp_deep_sleep_start();
+      esp_sleep_enable_ext1_wakeup(PIN_BITMASK, ESP_EXT1_WAKEUP_ANY_HIGH);
+      esp_deep_sleep_start();
+      
       break;
     case ERROR:
       errorHandler();
@@ -191,7 +223,7 @@ void systemStateMachine() {
 }
 
 /**
-* The state machine for the entire system
+* The state machine for the dual tank system
 */
 void tankStateMachine() {
   switch (tankState) {
@@ -354,17 +386,19 @@ bool tankFull(){
 
 void errorChecking() {
 
-  currentTime = millis();
-  if (currentTime - errTimer >= errWaitTime) {
+  if (millis() - errTimer >= errWaitTime) {
 
     // 
-    if (floatLeft.size() == 5) floatLeft.pop_front();
-    if (floatRight.size() == 5) floatRight.pop_front();
+    if (floatLeft.size() == errSize) floatLeft.pop_front();
+    if (floatRight.size() == errSize) floatRight.pop_front();
     floatLeft.push_back(int(sensorValueL));
     floatRight.push_back(int(sensorValueR));
 
-    if (floatLeft.size() == 5) {
-      float avg = std::accumulate(floatLeft.begin(), floatRight.end(), 0.0) / floatLeft.size();
+    if (floatLeft.size() == errSize) {
+      int avg = std::accumulate(floatLeft.begin(), floatLeft.end(), 0.0) / floatLeft.size();
+      String a = "Float left: ";
+      for (int n : floatLeft) a += String(n) + " ";
+      Serial.println(a + "LEFT AVG: " + String(avg));
       
       // LOW when Filling-Full
       if (avg == 0 && systemState >= FILL_FERT_LEFT ) {
@@ -392,8 +426,11 @@ void errorChecking() {
 
     }
 
-    if (floatRight.size() == 5) {
-      float avg = std::accumulate(floatRight.begin(), floatRight.end(), 0.0) / floatRight.size();
+    if (floatRight.size() == errSize) {
+      int avg = std::accumulate(floatRight.begin(), floatRight.end(), 0.0) / floatRight.size();
+      String a = "Float Right: ";
+      for (int n : floatRight) a += String(n) + " ";
+      Serial.println(a + "RIGHT AVG: " + String(avg));
       
       // LOW when Filling-Full
       if (avg == 0 && systemState < FILL_FERT_LEFT ) {
@@ -421,7 +458,7 @@ void errorChecking() {
 
     }
 
-    errTimer = currentTime;
+    errTimer = millis();
   }
 }
 
@@ -429,42 +466,42 @@ void errorHandler(){
   switch(err){
 
       case FLOAT_HIGH_BROKEN_LEFT:
-        Serial.print("ERROR: LEFT FLOAT NOT FOUND");
+        Serial.println("ERROR: LEFT FLOAT NOT FOUND");
 
         break;
       
       case FLOAT_HIGH_LEFT:
-        Serial.print("ERROR: LEFT FLOAT STUCK HIGH");
+        Serial.println("ERROR: LEFT FLOAT STUCK HIGH");
 
         break;
         
       case FLOAT_LOW_LEFT:
-        Serial.print("ERROR: LEFT FLOAT STUCK LOW");
+        Serial.println("ERROR: LEFT FLOAT STUCK LOW");
 
         break;
         
       case FLOAT_NO_CHANGE_LEFT:
-        Serial.print("ERROR: LEFT FLOAT NOT MOVING");
+        Serial.println("ERROR: LEFT FLOAT NOT MOVING");
 
         break;
         
       case FLOAT_HIGH_BROKEN_RIGHT:
-        Serial.print("ERROR: RIGHT FLOAT NOT FOUND");
+        Serial.println("ERROR: RIGHT FLOAT NOT FOUND");
 
         break;
         
       case FLOAT_HIGH_RIGHT:
-        Serial.print("ERROR: RIGHT FLOAT STUCK HIGH");
+        Serial.println("ERROR: RIGHT FLOAT STUCK HIGH");
 
         break;
         
       case FLOAT_LOW_RIGHT:
-        Serial.print("ERROR: RIGHT FLOAT STUCK LOW");
+        Serial.println("ERROR: RIGHT FLOAT STUCK LOW");
 
         break;
         
       case FLOAT_NO_CHANGE_RIGHT:
-        Serial.print("ERROR: RIGHT FLOAT NOT MOVING");
+        Serial.println("ERROR: RIGHT FLOAT NOT MOVING");
 
         break;
     default:
