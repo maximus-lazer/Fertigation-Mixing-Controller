@@ -9,21 +9,16 @@
 #include <Preferences.h> // For storing data into flash
 
 // Define PINS
-#define transistor D12
-#define tankLTOP D4
-#define tankLBOT D11
-#define tankRTOP D6
-#define tankRBOT D5
-#define waterPIN D7
-#define fertilizerPIN D8
-#define sleep D2
+#define waterValveIn1 D12
+#define waterValveIn2 D11
+#define fertValveIn3 D10
+#define fertValveIn4 D9
+#define topValvesIn1 D8
+#define topValvesIn2 D7
+#define botValvesIn3 D6
+#define botValvesIn4 D5
 #define fertInput D3
-#define topValvesIn1 D10
-#define topValvesIn2 D9
-// #define waterValveIn1 D7
-// #define waterValveIn2 D8
-// #define fertValveIn1 D12
-// #define fertValveIn2 D13
+#define startInput D2
 #define floatSensorL A1
 #define floatSensorR A0
 
@@ -34,10 +29,10 @@
 // Bitmask with both SolTag inputs
 #define PIN_BITMASK soltagStartMask|soltagFertMask
 
+#define uS_TO_S_FACTOR 1000000ULL // Conversion factor for micro seconds to seconds
 
-#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
-
-#define MAXBITS 1520.0 // Bit maximum for float sensors
+// [3.3 Vin * 190 / (190 + 151)] / (3.3 Vref) * 4095 bits = 2281 bits
+#define MAXBITS 2281.0 // Bit maximum for float sensors
 #define MAXPERCENT 0.85 // Percent threshold for full Tank
 #define MINPERCENT 0.20 // Percent threshold for empty Tank
 
@@ -45,17 +40,17 @@
 const float VCC = 3.3; // VCC output voltage from pins
 const int bits = 4095; // 2^(16)-1 bits for ADC
 const float conversion = VCC / bits; // Conversion multiplier for converting analog input to voltage
+const unsigned long fertWaitTime = 1 * 1000; // sec * 1000ms/sec = ms
 const unsigned long errWaitTime = 5 * 1000; // sec * 1000ms/sec = ms
 const int errSize = 5; // Max size of error checking lists
 const int pulse = 100; // Pulse time for solenoid (ms)
 
-int startBit = 0;
+// Create timers
 unsigned long timer;
 unsigned long errTimer;
-unsigned long currentTime;
 
-uint16_t sensorValueR = 0;
-uint16_t sensorValueL = 0;
+uint16_t sensorValueR = 0; // Float sensor right reading
+uint16_t sensorValueL = 0; // Float sensor left reading
 float fertPercent = 0.0; // Percent threshold for filling fertilizer
 unsigned char storedFertValue; // Value of saved fertilizer percentage
 volatile float voltageR = 0;
@@ -65,9 +60,8 @@ volatile float percentFullR; // Percent threshold when Right Tank is full
 std::list<int> floatLeft, floatRight; // Lists for left and right float sensors
 Preferences prefs;
 
-enum ErrorType {FLOAT_HIGH_BROKEN_LEFT, FLOAT_HIGH_LEFT, FLOAT_LOW_LEFT, FLOAT_NO_CHANGE_LEFT, FLOAT_HIGH_BROKEN_RIGHT, FLOAT_HIGH_RIGHT, FLOAT_LOW_RIGHT, FLOAT_NO_CHANGE_RIGHT, } err;
-enum SourceValveState {CLOSE, OPEN} waterSource, fertilizerSource;
-enum SystemState {WAKE_UP, FERT_INPUT, WAIT_FOR_START, ACTIVE, SLEEP, ERROR} systemState, preErrorState;
+enum ErrorType {NO_ERROR, FLOAT_HIGH_BROKEN, FLOAT_HIGH, FLOAT_LOW, FLOAT_NO_CHANGE} leftError, rightError;
+enum SystemState {WAKE_UP, FERT_INPUT, WAIT_FOR_START, ACTIVE, SLEEP, ERROR} systemState;
 enum TankState {FILL_FERT_RIGHT, FILL_WATER_RIGHT, RIGHT_FULL_WAIT, FILL_FERT_LEFT, FILL_WATER_LEFT,LEFT_FULL_WAIT} tankState;
 
 /**
@@ -83,21 +77,16 @@ void setup() {
   storedFertValue = prefs.getUChar("Percentage", 0); // Get current fertilizer percentage
 
   // Initializing pins
-  pinMode(transistor, OUTPUT);
-  pinMode(tankLTOP, OUTPUT);
-  pinMode(tankLBOT, OUTPUT);
-  pinMode(tankRTOP, OUTPUT);
-  pinMode(tankRBOT, OUTPUT);
-  pinMode(waterPIN, OUTPUT);
-  pinMode(fertilizerPIN, OUTPUT);
-  pinMode(sleep, INPUT); // High = Active, Low = Sleep
+  pinMode(startInput, INPUT); // High = Active, Low = Sleep
   pinMode(fertInput, INPUT);
   pinMode(topValvesIn1, OUTPUT);
   pinMode(topValvesIn2, OUTPUT);
-  // pinMode(waterValveIn1, OUTPUT);
-  // pinMode(waterValveIn2, OUTPUT);
-  // pinMode(fertValveIn1, OUTPUT);
-  // pinMode(fertValveIn2, OUTPUT);
+  pinMode(botValvesIn3, OUTPUT);
+  pinMode(botValvesIn4, OUTPUT);
+  pinMode(waterValveIn1, OUTPUT);
+  pinMode(waterValveIn2, OUTPUT);
+  pinMode(fertValveIn3, OUTPUT);
+  pinMode(fertValveIn4, OUTPUT);
 
   timer = millis();
   errTimer = millis();
@@ -112,16 +101,17 @@ void loop() {
   sensorValueR = analogRead(floatSensorR);
   sensorValueL = analogRead(floatSensorL);
 
+  // TODO: Test and use constrain() for this instead
   percentFullL = sensorValueL/MAXBITS;
   percentFullR = sensorValueR/MAXBITS;
 
   if(percentFullL > 1.0){percentFullL = 1.0;}
   if(percentFullR > 1.0){percentFullR = 1.0;}
 
-  if((millis()-timer) > 5000){
-    timer = millis();
-    Serial.println("STORED FERT VALUE: " + String(storedFertValue));
-  }
+  // if((millis()-timer) > 5000){
+  //   timer = millis();
+  //   Serial.println("STORED FERT VALUE: " + String(storedFertValue));
+  // }
 
   // Running state machine
   systemStateMachine();
@@ -135,7 +125,7 @@ void systemStateMachine() {
         systemState = FERT_INPUT;
         storedFertValue = 2;
       }
-      else if(digitalRead(sleep) == 1) {
+      else if(digitalRead(startInput) == 1) {
         systemState = WAIT_FOR_START;
         fertPercent = float(storedFertValue) / 100.0; // Convert stored char into percentage
       }
@@ -144,14 +134,14 @@ void systemStateMachine() {
 
       break;
     case FERT_INPUT:
-      if((millis()-timer) > 1000){
+      if((millis()-timer) > fertWaitTime){
         timer = millis();
         if(digitalRead(fertInput) == 1){
           storedFertValue += 2;
           storedFertValue = constrain(storedFertValue, 0, 100); // Keep value between 0 and 100
           Serial.println("FertPercent: " + String(fertPercent));
         }
-        else if(digitalRead(sleep) == 1) {
+        else if(digitalRead(startInput) == 1) {
            systemState = WAIT_FOR_START;
            fertPercent = float(storedFertValue) / 100.0; // Convert stored char into percentage
         }
@@ -183,7 +173,7 @@ void systemStateMachine() {
       break;
     case ACTIVE:
       tankStateMachine();
-      errorChecking();
+      // errorChecking();
 
       voltageR = sensorValueR * conversion;
       voltageL = sensorValueL * conversion;
@@ -194,12 +184,12 @@ void systemStateMachine() {
         Serial.print(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
         Serial.print(" TankState: " + String(tankState));
         Serial.print(" SystemState: " + String(systemState));
-        Serial.print(" FertSource: " + String(fertilizerSource));
-        Serial.print(" WaterSource: " + String(waterSource));
         Serial.println(" FertPercent: " + String(fertPercent));
       }
-      if((digitalRead(sleep) == 0)&& tankFull())
-          systemState = SLEEP;
+
+      // TODO: uncomment
+      // if((digitalRead(startInput) == 0)&& tankFull())
+      //     systemState = SLEEP;
 
       break;
     case SLEEP:
@@ -286,8 +276,8 @@ void tankStateMachine() {
 
     // A default state if something goes wrong (should never get here)
     default:
-        waterSource = CLOSE;
-        fertilizerSource = CLOSE;
+        // waterSource = CLOSE;
+        // fertilizerSource = CLOSE;
         fertValve(0);
         waterValve(0);
       break;
@@ -296,42 +286,35 @@ void tankStateMachine() {
 
 void fertValve(bool openClose){
   if (openClose){
-    digitalWrite(fertilizerPIN, HIGH); 
-
-    // digitalWrite(fertValveIn1, LOW); 
-    // digitalWrite(fertValveIn2, HIGH); 
-    // delay(pulse);
-    // digitalWrite(fertValveIn1, LOW); 
-    // digitalWrite(fertValveIn2, LOW);
+    digitalWrite(fertValveIn3, LOW); 
+    digitalWrite(fertValveIn4, HIGH); 
+    delay(pulse);
+    digitalWrite(fertValveIn3, LOW); 
+    digitalWrite(fertValveIn4, LOW);
   }
   else{
-    digitalWrite(fertilizerPIN, LOW); 
-
-    // digitalWrite(fertValveIn1, HIGH); 
-    // digitalWrite(fertValveIn2, LOW); 
-    // delay(pulse);
-    // digitalWrite(fertValveIn1, LOW); 
-    // digitalWrite(fertValveIn2, LOW);
+    digitalWrite(fertValveIn3, HIGH); 
+    digitalWrite(fertValveIn4, LOW); 
+    delay(pulse);
+    digitalWrite(fertValveIn3, LOW); 
+    digitalWrite(fertValveIn4, LOW);
   }
 }
 
 void waterValve(bool openClose){
   if (openClose){
-    digitalWrite(waterPIN, HIGH); 
-
-    // digitalWrite(waterValveIn1, LOW); 
-    // digitalWrite(waterValveIn2, HIGH); 
-    // delay(pulse);
-    // digitalWrite(waterValveIn1, LOW); 
-    // digitalWrite(waterValveIn2, LOW);
+    digitalWrite(waterValveIn1, LOW); 
+    digitalWrite(waterValveIn2, HIGH); 
+    delay(pulse);
+    digitalWrite(waterValveIn1, LOW); 
+    digitalWrite(waterValveIn2, LOW);
   }
   else{
-    digitalWrite(waterPIN, LOW); 
-    // digitalWrite(waterValveIn1, HIGH); 
-    // digitalWrite(waterValveIn2, LOW); 
-    // delay(pulse);
-    // digitalWrite(waterValveIn1, LOW); 
-    // digitalWrite(waterValveIn2, LOW);
+    digitalWrite(waterValveIn1, HIGH); 
+    digitalWrite(waterValveIn2, LOW); 
+    delay(pulse);
+    digitalWrite(waterValveIn1, LOW); 
+    digitalWrite(waterValveIn2, LOW);
   }
 }
 
@@ -342,36 +325,26 @@ void waterValve(bool openClose){
  */
 void tankValveSwitch(bool LeftOrRight) {
   if (LeftOrRight){
-    // digitalWrite(transistor, HIGH);
-    // delay(5000);
     digitalWrite(topValvesIn1, LOW); 
-    digitalWrite(topValvesIn2, HIGH); 
+    digitalWrite(topValvesIn2, HIGH);
+    digitalWrite(botValvesIn3, HIGH); 
+    digitalWrite(botValvesIn4, LOW); 
     delay(pulse);
     digitalWrite(topValvesIn1, LOW); 
     digitalWrite(topValvesIn2, LOW);
-    // delay(50);
-    // digitalWrite(transistor, LOW);
-
-    digitalWrite(tankLTOP, LOW);
-    digitalWrite(tankLBOT, HIGH);
-    digitalWrite(tankRTOP, HIGH);
-    digitalWrite(tankRBOT, LOW);
+    digitalWrite(botValvesIn3, LOW); 
+    digitalWrite(botValvesIn4, LOW); 
   }
   else{
-    //digitalWrite(transistor, HIGH);
-    //delay(5000);
     digitalWrite(topValvesIn1, HIGH); 
     digitalWrite(topValvesIn2, LOW); 
+    digitalWrite(botValvesIn3, LOW); 
+    digitalWrite(botValvesIn4, HIGH); 
     delay(pulse);
     digitalWrite(topValvesIn1, LOW); 
     digitalWrite(topValvesIn2, LOW);
-    //delay(50);
-    //digitalWrite(transistor, LOW);
-
-    digitalWrite(tankLTOP, HIGH);
-    digitalWrite(tankLBOT, LOW);
-    digitalWrite(tankRTOP, LOW);
-    digitalWrite(tankRBOT, HIGH);
+    digitalWrite(botValvesIn3, LOW); 
+    digitalWrite(botValvesIn4, LOW); 
   }
 }
 
@@ -386,6 +359,7 @@ bool tankFull(){
 
 void errorChecking() {
 
+  /*
   if (millis() - errTimer >= errWaitTime) {
 
     // 
@@ -459,10 +433,11 @@ void errorChecking() {
     }
 
     errTimer = millis();
-  }
+  }*/
 }
 
 void errorHandler(){
+  /*
   switch(err){
 
       case FLOAT_HIGH_BROKEN_LEFT:
@@ -506,5 +481,5 @@ void errorHandler(){
         break;
     default:
       break;
-  }
+  }*/
 }
