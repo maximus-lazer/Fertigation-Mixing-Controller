@@ -1,5 +1,8 @@
 /*
- * TODO: Insert disclaimer
+ * This Code is made by WPI Students to complete the IQP project requirement. Disclaimer for the paper below:
+ * 
+ * "This report represents the work of one or more WPI undergraduate students submitted to the faculty as evidence of completion 
+ * of a degree requirement. WPI routinely publishes these reports on the web without editorial or peer review."
  */
 
 // Libraries needed
@@ -37,9 +40,6 @@
 #define MINPERCENT 0.20 // Percent threshold for empty Tank
 
 // Defining constants
-const float VCC = 3.3; // VCC output voltage from pins
-const int bits = 4095; // 2^(16)-1 bits for ADC
-const float conversion = VCC / bits; // Conversion multiplier for converting analog input to voltage
 const unsigned long fertWaitTime = 1 * 1000; // sec * 1000ms/sec = ms
 const unsigned long errWaitTime = 5 * 1000; // sec * 1000ms/sec = ms
 const int errSize = 5; // Max size of error checking lists
@@ -53,8 +53,6 @@ uint16_t sensorValueR = 0; // Float sensor right reading
 uint16_t sensorValueL = 0; // Float sensor left reading
 float fertPercent = 0.0; // Percent threshold for filling fertilizer
 unsigned char storedFertValue; // Value of saved fertilizer percentage
-volatile float voltageR = 0;
-volatile float voltageL = 0;
 volatile float percentFullL; // Percent threshold when Left Tank is full
 volatile float percentFullR; // Percent threshold when Right Tank is full
 std::list<int> floatLeft, floatRight; // Lists for left and right float sensors
@@ -73,8 +71,6 @@ int message = Message::HEARTBEAT; // Message to send to SolTag when ACTIVE (~1V 
  * Runs once controller turns on or resets
  */
 void setup() {
-  // initialize serial communication at 9600 bits per second:
-  Serial.begin(9600);
 
   // Initialize States
   systemState = WAKE_UP;
@@ -116,11 +112,6 @@ void loop() {
   if(percentFullL > 1.0){percentFullL = 1.0;}
   if(percentFullR > 1.0){percentFullR = 1.0;}
 
-  // if((millis()-timer) > 5000){
-  //   timer = millis();
-  //   Serial.println("STORED FERT VALUE: " + String(storedFertValue));
-  // }
-
   // Running state machine
   systemStateMachine();
   
@@ -150,7 +141,6 @@ void systemStateMachine() {
         if(digitalRead(fertInput) == 1){
           storedFertValue += 2;
           storedFertValue = constrain(storedFertValue, 0, 100); // Keep value between 0 and 100
-          Serial.println("FertPercent: " + String(fertPercent));
         }
         else if(digitalRead(startInput) == 1) {
            systemState = WAIT_FOR_START;
@@ -175,12 +165,6 @@ void systemStateMachine() {
         tankValveSwitch(0);
         fertValve(1);
         analogWrite(messageOutput, message);
-      }else {
-        if((millis()-timer) > 1000){
-          timer = millis();
-          Serial.print("Set the float sensors to a starting state");
-          Serial.println(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
-        }
       }
       
       break;
@@ -188,21 +172,8 @@ void systemStateMachine() {
       tankStateMachine();
       errorChecking();
 
-      voltageR = sensorValueR * conversion;
-      voltageL = sensorValueL * conversion;
-
-      // if((millis()-timer) > 500){
-      //   timer = millis();
-      //   Serial.print("L: " + String(sensorValueL) + " R: " + String(sensorValueR));
-      //   Serial.print(" %L: " + String(percentFullL) + " %R: " + String(percentFullR));
-      //   Serial.print(" TankState: " + String(tankState));
-      //   Serial.print(" SystemState: " + String(systemState));
-      //   Serial.println(" FertPercent: " + String(fertPercent));
-      // }
-
-      // TODO: uncomment
-      // if((digitalRead(startInput) == 0)&& tankFull())
-      //     systemState = SLEEP;
+      if((digitalRead(startInput) == 0)&& tankFull())
+          systemState = SLEEP;
 
       break;
     case SLEEP:
@@ -397,9 +368,6 @@ void errorChecking() {
     // Check Left Side
     if (floatLeft.size() == errSize) {
       int avg = std::accumulate(floatLeft.begin(), floatLeft.end(), 0.0) / floatLeft.size();
-      String a = "Float left: ";
-      for (int n : floatLeft) a += String(n) + " ";
-      Serial.println(a + "LEFT AVG: " + String(avg));
       
       // Sensor too high / broken
       if (avg > MAXBITS) {
@@ -430,9 +398,6 @@ void errorChecking() {
     // Check Right Side
     if (floatRight.size() == errSize) {
       int avg = std::accumulate(floatRight.begin(), floatRight.end(), 0.0) / floatRight.size();
-      String a = "Float Right: ";
-      for (int n : floatRight) a += String(n) + " ";
-      Serial.println(a + "RIGHT AVG: " + String(avg));
 
       // Sensor too high / broken
       if (avg > MAXBITS) {
@@ -518,51 +483,4 @@ void errorHandler() {
 
   analogWrite(messageOutput, message);
   
-  switch(leftError){
-
-      case FLOAT_HIGH_BROKEN:
-        Serial.println("ERROR: LEFT FLOAT NOT FOUND");
-
-        break;
-      
-      case FLOAT_HIGH:
-        Serial.println("ERROR: LEFT FLOAT STUCK HIGH");
-
-        break;
-        
-      case FLOAT_LOW:
-        Serial.println("ERROR: LEFT FLOAT STUCK LOW");
-
-        break;
-        
-      case FLOAT_NO_CHANGE:
-        Serial.println("ERROR: LEFT FLOAT NOT MOVING");
-
-        break;
-
-  }
-      switch(rightError){
-        
-      case FLOAT_HIGH_BROKEN:
-        Serial.println("ERROR: RIGHT FLOAT NOT FOUND");
-
-        break;
-        
-      case FLOAT_HIGH:
-        Serial.println("ERROR: RIGHT FLOAT STUCK HIGH");
-
-        break;
-        
-      case FLOAT_LOW:
-        Serial.println("ERROR: RIGHT FLOAT STUCK LOW");
-
-        break;
-        
-      case FLOAT_NO_CHANGE:
-        Serial.println("ERROR: RIGHT FLOAT NOT MOVING");
-
-        break;
-    default:
-      break;
-  }
 }
