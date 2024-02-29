@@ -40,8 +40,8 @@
 #define MINPERCENT 0.20 // Percent threshold for empty Tank
 
 // Defining constants
-const unsigned long fertWaitTime = 1 * 1000; // sec * 1000ms/sec = ms
-const unsigned long errWaitTime = 5 * 1000; // sec * 1000ms/sec = ms
+const unsigned long fertWaitTime = 120 * 1000; // sec * 1000ms/sec = ms
+const unsigned long errWaitTime = 20 * 1000; // sec * 1000ms/sec = ms
 const int errSize = 5; // Max size of error checking lists
 const int pulse = 100; // Pulse time for solenoid (ms)
 
