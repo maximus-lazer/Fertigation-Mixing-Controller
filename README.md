@@ -1,6 +1,6 @@
 # Fertigation-Mixing-Controller
 
-IQP PAPER LINK: [insert]
+IQP PAPER LINK: [The Fertilizer Frontier](https://digital.wpi.edu/concern/student_works/df65vc99v?locale=en)
 
 This Code is made by WPI Students to complete the IQP project requirement. Disclaimer for the paper below:
 
